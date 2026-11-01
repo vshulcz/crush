@@ -161,6 +161,7 @@ type coordinator struct {
 	mainAgent     SessionAgent
 	mainAgentName string
 	agents        map[string]SessionAgent
+	prompts       map[string]*prompt.Prompt
 	hookRunner    *hooks.Runner
 	// memory yields the cross-session recall backend for every agent
 	// this coordinator builds. It is asked again on each build, so a
@@ -239,6 +240,7 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		notify:       opts.Notify,
 		runComplete:  opts.RunComplete,
 		agents:       make(map[string]SessionAgent),
+		prompts:      make(map[string]*prompt.Prompt),
 		allSkills:    allSkills,
 		activeSkills: activeSkills,
 		skillTracker: skillTracker,
@@ -265,6 +267,7 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		return nil, err
 	}
 	c.agents[config.AgentCoder] = agent
+	c.prompts[config.AgentCoder] = coderPrompt
 
 	planCfg, ok := c.cfg.Config().Agents[config.AgentPlan]
 	if !ok {
@@ -284,6 +287,7 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		return nil, err
 	}
 	c.agents[config.AgentPlan] = planAgent
+	c.prompts[config.AgentPlan] = planSystemPrompt
 
 	c.mainAgent = agent
 	c.mainAgentName = config.AgentCoder
@@ -1543,11 +1547,26 @@ func (c *coordinator) updateAgentModels(ctx context.Context, agent SessionAgent,
 	// mid-session connect or disconnect travels: without it the agent
 	// would gain the memory tools while its own recall stayed as it
 	// was at startup, which is worse than either state alone.
-	agent.SetMemory(c.memory.get())
+	mem := c.memory.get()
+	for _, a := range c.agents {
+		a.SetMemory(mem)
+	}
+	agent.SetMemory(mem)
 
 	agentCfg, ok := c.cfg.Config().Agents[name]
 	if !ok {
 		return fmt.Errorf("%w: %s", errMainAgentNotFound, name)
+	}
+
+	if p, ok := c.prompts[name]; ok {
+		large := c.mainModels().Large
+		if large.Model != nil {
+			systemPrompt, err := p.Build(ctx, large.Model.Provider(), large.Model.Model(), c.cfg)
+			if err != nil {
+				return err
+			}
+			agent.SetSystemPrompt(systemPrompt)
+		}
 	}
 
 	tools, err := c.buildTools(ctx, agentCfg, false)

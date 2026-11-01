@@ -21,9 +21,11 @@ import (
 
 // mockSessionAgent is a minimal mock for the SessionAgent interface.
 type mockSessionAgent struct {
-	model     Model
-	runFunc   func(ctx context.Context, call SessionAgentCall) (*fantasy.AgentResult, error)
-	cancelled []string
+	model        Model
+	runFunc      func(ctx context.Context, call SessionAgentCall) (*fantasy.AgentResult, error)
+	cancelled    []string
+	systemPrompt string
+	memory       Memory
 }
 
 func (m *mockSessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy.AgentResult, error) {
@@ -36,8 +38,8 @@ func (m *mockSessionAgent) BeginAccepted(sessionID string) *AcceptedRun {
 
 func (m *mockSessionAgent) Model() Model                        { return m.model }
 func (m *mockSessionAgent) SetTools(tools []fantasy.AgentTool)  {}
-func (m *mockSessionAgent) SetSystemPrompt(systemPrompt string) {}
-func (m *mockSessionAgent) SetMemory(memory Memory)             {}
+func (m *mockSessionAgent) SetSystemPrompt(systemPrompt string) { m.systemPrompt = systemPrompt }
+func (m *mockSessionAgent) SetMemory(memory Memory)             { m.memory = memory }
 func (m *mockSessionAgent) Cancel(sessionID string) {
 	m.cancelled = append(m.cancelled, sessionID)
 }
@@ -823,4 +825,17 @@ func TestCoordinatorSetMainAgent(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, errMainAgentNotFound)
 	})
+}
+
+func TestLiveMemoryFeaturesRebuildSystemPrompt(t *testing.T) {
+	t.Parallel()
+
+	var current Memory
+	coord := &coordinator{
+		memory: MemoryProvider(func() Memory { return current }),
+	}
+	require.Empty(t, coord.liveMemoryFeatures())
+
+	current = &stubMemory{snapshot: "snap"}
+	require.Equal(t, []string{memoryFeatureName}, coord.liveMemoryFeatures())
 }
